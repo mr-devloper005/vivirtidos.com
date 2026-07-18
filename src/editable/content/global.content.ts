@@ -8,11 +8,11 @@ export const globalContent = {
     baseUrl: slot4BrandConfig.baseUrl,
   },
   nav: {
-    tagline: 'Independent reading platform',
+    tagline: 'Directory and reference platform',
     primaryLinks: [
       { label: 'Articles', href: '/articles' },
       { label: 'Visuals', href: '/image-sharing' },
-      { label: 'Listings', href: '/listings' },
+      { label: 'Local Directory', href: '/listing' },
       { label: 'Contact', href: '/contact' },
     ],
     actions: {
@@ -21,16 +21,16 @@ export const globalContent = {
     },
   },
   footer: {
-    tagline: 'Stories, resources, and discoverable posts',
-    description: 'A connected publishing surface for articles, visuals, listings, profiles, bookmarks, and downloadable resources.',
+    tagline: 'Local records and reference guides',
+    description: 'Explore records and guides.',
     columns: [
       {
         title: 'Explore',
         links: [
           { label: 'Articles', href: '/articles' },
-          { label: 'Listings', href: '/listings' },
+          { label: 'Local Directory', href: '/listing' },
           { label: 'Images', href: '/image-sharing' },
-          { label: 'PDF Library', href: '/pdf' },
+          { label: 'Reference Library', href: '/pdf' },
         ],
       },
       {
