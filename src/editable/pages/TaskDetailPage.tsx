@@ -1,9 +1,10 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { ArrowLeft, ArrowUpRight, Bookmark, Building2, Camera, CheckCircle2, Download, ExternalLink, FileText, Globe2, Mail, MapPin, Phone, Star, Tag, UserRound } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Bookmark, Building2, Camera, CheckCircle2, Download, ExternalLink, FileText, Globe2, Mail, MapPin, Phone, Star, UserRound } from 'lucide-react'
 import { buildPostMetadata, buildTaskMetadata } from '@/lib/seo'
 import { fetchArticleComments, fetchTaskPostBySlug, fetchTaskPosts } from '@/lib/task-data'
 import { getTaskConfig, SITE_CONFIG, type TaskKey } from '@/lib/site-config'
+import { Ads, getSlotSizes } from '@/lib/ads'
 import type { SitePost } from '@/lib/site-connector'
 import { EditableSiteShell } from '@/editable/shell/EditableSiteShell'
 import { EditableArticleComments } from '@/editable/components/EditableArticleComments'
@@ -25,11 +26,13 @@ export async function EditableTaskDetailRoute({ task, params }: { task: TaskKey;
   if (!post) notFound()
   const related = (await fetchTaskPosts(task, 7)).filter((item) => item.slug !== post.slug).slice(0, 4)
   const comments = task === 'article' ? await fetchArticleComments(post.slug, 50) : []
-  return <TaskDetailView task={task} post={post} related={related} comments={comments} />
+  const pdfFileSize = task === 'pdf' ? await resolvePdfFileSize(post) : ''
+  return <TaskDetailView task={task} post={post} related={related} comments={comments} pdfFileSize={pdfFileSize} />
 }
 
 const getContent = (post: SitePost) => post.content && typeof post.content === 'object' ? post.content as Record<string, unknown> : {}
 const asText = (value: unknown) => typeof value === 'string' ? value.trim() : ''
+const asNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : 0
 const isUrl = (value: string) => value.startsWith('/') || /^https?:\/\//i.test(value)
 
 const getField = (post: SitePost, keys: string[]) => {
@@ -62,6 +65,63 @@ const escapeHtml = (value: string) => value
   .replace(/'/g, '&#39;')
 
 const safeUrl = (value: string) => /^https?:\/\//i.test(value) ? value : '#'
+const pickRandom = (sizes: string[]) => sizes[Math.floor(Math.random() * sizes.length)]
+const displayTaskLabel = (task: TaskKey, fallback: string) => {
+  if (task === 'listing') return 'Local Directory'
+  if (task === 'pdf') return 'Reference Library'
+  return fallback
+}
+
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return ''
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  const precision = value >= 10 || unitIndex === 0 ? 0 : 1
+  return `${value.toFixed(precision)} ${units[unitIndex]}`
+}
+
+const fileSizeFromPost = (post: SitePost) => {
+  const content = getContent(post)
+  const textValue = getField(post, ['fileSize', 'filesize', 'size', 'file_size', 'downloadSize'])
+  if (textValue && !/ready to download/i.test(textValue)) return textValue
+
+  const byteKeys = ['fileSizeBytes', 'sizeBytes', 'bytes', 'contentLength', 'file_size_bytes']
+  for (const key of byteKeys) {
+    const value = asNumber(content[key])
+    const formatted = formatBytes(value)
+    if (formatted) return formatted
+  }
+
+  const media = Array.isArray(post.media) ? post.media : []
+  for (const item of media) {
+    const record = item as Record<string, unknown>
+    const formatted = formatBytes(asNumber(record.sizeBytes) || asNumber(record.bytes) || asNumber(record.size))
+    if (formatted) return formatted
+  }
+
+  return ''
+}
+
+const resolvePdfFileSize = async (post: SitePost) => {
+  const fromPost = fileSizeFromPost(post)
+  if (fromPost) return fromPost
+
+  const fileUrl = getField(post, ['fileUrl', 'pdfUrl', 'documentUrl', 'url'])
+  if (!/^https?:\/\//i.test(fileUrl)) return ''
+
+  try {
+    const response = await fetch(fileUrl, { method: 'HEAD', cache: 'no-store' })
+    const length = Number(response.headers.get('content-length') || 0)
+    return formatBytes(length)
+  } catch {
+    return ''
+  }
+}
 
 const linkifyMarkdown = (value: string) => value
   .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/gi, (_match, label, url) => `<a href="${safeUrl(url)}" target="_blank" rel="nofollow noopener noreferrer">${label}</a>`)
@@ -113,7 +173,7 @@ const mapSrcFor = (post: SitePost) => {
   return ''
 }
 
-export function TaskDetailView({ task, post, related, comments = [] }: { task: TaskKey; post: SitePost; related: SitePost[]; comments?: Array<{ id: string; name: string; comment: string; createdAt: string }> }) {
+export function TaskDetailView({ task, post, related, comments = [], pdfFileSize = '' }: { task: TaskKey; post: SitePost; related: SitePost[]; comments?: Array<{ id: string; name: string; comment: string; createdAt: string }>; pdfFileSize?: string }) {
   return (
     <EditableSiteShell>
       <main style={taskThemeStyle(task)} className="min-h-screen bg-[var(--tk-bg)] text-[var(--tk-text)]">
@@ -121,7 +181,7 @@ export function TaskDetailView({ task, post, related, comments = [] }: { task: T
         {task === 'classified' ? <ClassifiedDetail post={post} related={related} /> : null}
         {task === 'image' ? <ImageDetail post={post} related={related} /> : null}
         {task === 'sbm' ? <BookmarkDetail post={post} related={related} /> : null}
-        {task === 'pdf' ? <PdfDetail post={post} related={related} /> : null}
+        {task === 'pdf' ? <PdfDetail post={post} related={related} pdfFileSize={pdfFileSize} /> : null}
         {task === 'profile' ? <ProfileDetail post={post} related={related} /> : null}
         {task === 'article' ? <ArticleDetail post={post} related={related} comments={comments} /> : null}
       </main>
@@ -182,9 +242,10 @@ function Kicker({ task, children }: { task: TaskKey; children: React.ReactNode }
 
 function BackLink({ task }: { task: TaskKey }) {
   const taskConfig = getTaskConfig(task)
+  const label = displayTaskLabel(task, taskConfig?.label || 'entries')
   return (
     <Link href={taskConfig?.route || '/'} className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--tk-muted)] transition hover:text-[var(--tk-text)]">
-      <ArrowLeft className="h-4 w-4" /> Back to {taskConfig?.label || 'posts'}
+      <ArrowLeft className="h-4 w-4" /> Back to {label}
     </Link>
   )
 }
@@ -213,40 +274,64 @@ function ArticleDetail({ post, related, comments }: { post: SitePost; related: S
 // ----- Listing: a precise directory record -----
 function ListingDetail({ post, related }: { post: SitePost; related: SitePost[] }) {
   const images = getImages(post)
-  const logo = images[0]
+  const heroImage = images[0]
   const address = getField(post, ['address', 'location', 'city'])
   const phone = getField(post, ['phone', 'telephone', 'mobile'])
   const email = getField(post, ['email'])
   const website = getField(post, ['website', 'url'])
+  const hours = getField(post, ['hours', 'openingHours'])
   const mapSrc = mapSrcFor(post)
   return (
-    <section className="mx-auto max-w-[var(--editable-container)] px-6 py-14 sm:py-20 lg:px-8">
-      <BackLink task="listing" />
-      <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_380px]">
-        <article className="min-w-0">
-          <div className="flex flex-col gap-6 sm:flex-row sm:items-center">
-            <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-[var(--tk-radius)] border border-[var(--tk-line)] bg-[var(--tk-raised)]">
-              {logo ? <img src={logo} alt="" className="h-full w-full object-cover" /> : <Building2 className="h-12 w-12 text-[var(--tk-muted)]" />}
-            </div>
-            <div className="min-w-0">
-              <Kicker task="listing">Business listing</Kicker>
-              <h1 className="editable-display mt-4 text-4xl font-semibold leading-[1.04] tracking-[-0.03em] sm:text-5xl">{post.title}</h1>
-              <DetailMeta post={post} category={getField(post, ['category'])} />
-            </div>
+    <>
+      <section className="bg-white">
+        <div className="mx-auto max-w-[var(--editable-container)] px-6 py-[100px]">
+          <BackLink task="listing" />
+          <div className="mt-10 text-center">
+            <Kicker task="listing">{categoryOf(post, 'Local record')}</Kicker>
+            <h1 className="editable-display mx-auto mt-5 max-w-4xl text-[42px] font-bold leading-[1.12] sm:text-[52px]">{post.title}</h1>
+            {leadText(post) ? <p className="mx-auto mt-5 max-w-2xl text-base leading-[1.75] text-[var(--tk-muted)]">{leadText(post)}</p> : null}
           </div>
-          {leadText(post) ? <p className="mt-7 max-w-2xl text-lg leading-8 text-[var(--tk-muted)]">{leadText(post)}</p> : null}
-          <InfoGrid items={[['Location', address, MapPin], ['Phone', phone, Phone], ['Email', email, Mail], ['Website', website, Globe2]]} />
-          <Divider />
-          <BodyContent post={post} />
-          <ImageStrip images={images.slice(1)} label="Showcase" />
-        </article>
-        <aside className="space-y-6 lg:sticky lg:top-24 lg:self-start">
-          {mapSrc ? <MapBox src={mapSrc} label={address || post.title} /> : null}
-          <ContactAction website={website} phone={phone} email={email} />
-          <RelatedPanel task="listing" post={post} related={related} />
-        </aside>
-      </div>
-    </section>
+          <div className="mt-12 overflow-hidden rounded-[24px] border border-[var(--tk-line)] bg-[var(--tk-raised)] shadow-[0_8px_28px_rgba(20,20,43,0.10)]">
+            {heroImage ? <img src={heroImage} alt="" className="aspect-[16/9] w-full object-cover" /> : <div className="flex aspect-[16/9] items-center justify-center"><Building2 className="h-16 w-16 text-[var(--tk-muted)]" /></div>}
+          </div>
+          <InfoGrid items={[['Location', address, MapPin], ['Phone', phone, Phone], ['Hours', hours || 'Verified details', CheckCircle2], ['Verified', 'Profile reviewed', CheckCircle2]]} />
+        </div>
+      </section>
+
+      <section className="bg-[var(--tk-raised)]">
+        <div className="mx-auto grid max-w-[var(--editable-container)] gap-10 px-6 py-[100px] lg:grid-cols-[minmax(0,1fr)_380px]">
+          <article className="min-w-0 rounded-[20px] border border-[var(--tk-line)] bg-white p-8 shadow-[0_2px_7px_rgba(20,20,43,0.06)] lg:p-12">
+            <h2 className="editable-display text-[32px] font-bold leading-[1.313]">About this local record</h2>
+            <BodyContent post={post} />
+            <TagChips post={post} />
+            <ImageStrip images={images.slice(1)} label="Gallery" />
+            {mapSrc ? <div className="mt-10"><MapBox src={mapSrc} label={address || post.title} /></div> : null}
+          </article>
+
+          <aside className="space-y-6 lg:sticky lg:top-24 lg:self-start">
+            <div className="rounded-[20px] border border-[var(--tk-line)] bg-white p-6 shadow-[0_2px_7px_rgba(20,20,43,0.06)]">
+              <h2 className="editable-display text-xl font-bold">Contact</h2>
+              <div className="mt-5 grid gap-3">
+                <ContactRow icon={MapPin} label="Address" value={address} href={address ? `https://maps.google.com/?q=${encodeURIComponent(address)}` : ''} />
+                <ContactRow icon={Phone} label="Phone" value={phone} href={phone ? `tel:${phone}` : ''} />
+                <ContactRow icon={Mail} label="Email" value={email} href={email ? `mailto:${email}` : ''} />
+                <ContactRow icon={Globe2} label="Website" value={website} href={website} />
+                <ContactRow icon={CheckCircle2} label="Hours" value={hours} />
+              </div>
+              {website ? <Link href={website} target="_blank" rel="noreferrer" className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[var(--tk-accent)] px-6 py-4 text-sm font-bold text-[var(--tk-on-accent)] transition duration-300 hover:scale-[0.98]">Visit site <ExternalLink className="h-4 w-4" /></Link> : null}
+            </div>
+            <div className="rounded-[20px] border border-[var(--tk-line)] bg-white p-6">
+              <h3 className="text-sm font-bold">Trust signals</h3>
+              <div className="mt-4 grid gap-3 text-sm text-[var(--tk-muted)]">
+                {['Contact details checked', 'Category reviewed', 'Ready for direct outreach'].map((item) => <p key={item} className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-[var(--tk-accent)]" /> {item}</p>)}
+              </div>
+            </div>
+            <Ads slot="sidebar" size={pickRandom(getSlotSizes('sidebar'))} showLabel />
+          </aside>
+        </div>
+      </section>
+      <RelatedStrip task="listing" related={related} title="More directory" />
+    </>
   )
 }
 
@@ -342,44 +427,82 @@ function BookmarkDetail({ post, related }: { post: SitePost; related: SitePost[]
   )
 }
 
-// ----- PDF: a document workspace -----
-function PdfDetail({ post, related }: { post: SitePost; related: SitePost[] }) {
+// ----- Reference Library: file workspace -----
+function PdfDetail({ post, related, pdfFileSize }: { post: SitePost; related: SitePost[]; pdfFileSize?: string }) {
   const fileUrl = getField(post, ['fileUrl', 'pdfUrl', 'documentUrl', 'url'])
+  const fileName = getField(post, ['fileName', 'filename', 'name']) || post.slug
+  const pages = getField(post, ['pages', 'pageCount']) || 'Available in preview'
+  const fileSize = pdfFileSize || fileSizeFromPost(post) || 'Unavailable'
+  const updated = getField(post, ['updated', 'updatedAt']) || 'Recently indexed'
+  const uploadedBy = getField(post, ['uploadedBy', 'author']) || SITE_CONFIG.name
   return (
-    <section className="mx-auto max-w-[var(--editable-container)] px-6 py-14 sm:py-20 lg:px-8">
-      <BackLink task="pdf" />
-      <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <article className="min-w-0">
-          <div className="flex items-center gap-5">
-            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-[var(--tk-radius)] bg-[var(--tk-accent-soft)] text-[var(--tk-accent)]"><FileText className="h-9 w-9" /></div>
-            <div className="min-w-0">
-              <Kicker task="pdf">{categoryOf(post, 'Document')}</Kicker>
-              <h1 className="editable-display mt-3 text-3xl font-semibold leading-[1.05] tracking-[-0.02em] sm:text-4xl">{post.title}</h1>
-            </div>
+    <>
+      <section className="bg-white">
+        <div className="mx-auto max-w-[var(--editable-container)] px-6 py-[100px]">
+          <BackLink task="pdf" />
+          <div className="mt-10 flex flex-wrap gap-2">
+            <span className="rounded-full bg-[var(--tk-accent-soft)] px-4 py-2 text-xs font-bold text-[var(--tk-accent)]">Reference guide</span>
+            <span className="rounded-full border border-[var(--tk-line)] px-4 py-2 text-xs font-bold text-[var(--tk-muted)]">Download</span>
+            <span className="rounded-full border border-[var(--tk-line)] px-4 py-2 text-xs font-bold text-[var(--tk-muted)]">{categoryOf(post, 'Guide')}</span>
           </div>
-          <BodyContent post={post} />
-          {fileUrl ? (
-            <div className="mt-10 overflow-hidden rounded-[var(--tk-radius)] border border-[var(--tk-line)] bg-[var(--tk-surface)]">
-              <div className="flex items-center justify-between gap-3 border-b border-[var(--tk-line)] p-4">
-                <span className="text-sm font-semibold">Document preview</span>
-                <Link href={fileUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-[var(--tk-accent)] px-4 py-2 text-xs font-semibold text-[var(--tk-on-accent)] transition hover:opacity-90">Download <Download className="h-4 w-4" /></Link>
+          <h1 className="editable-display mt-6 max-w-5xl text-[48px] font-bold leading-[1.08] sm:text-[64px]">{post.title}</h1>
+          {leadText(post) ? <blockquote className="mt-8 rounded-[24px] bg-[var(--tk-accent)] px-8 py-10 text-center text-lg leading-8 text-white sm:px-16">{leadText(post)}</blockquote> : null}
+          <div className="mt-8 flex flex-wrap gap-4">
+            {fileUrl ? <Link href={fileUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-[var(--tk-accent)] px-7 py-4 text-sm font-bold text-white transition duration-300 hover:scale-[0.98]">Download <Download className="h-4 w-4" /></Link> : null}
+            {fileUrl ? <Link href={fileUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full border border-[var(--tk-line)] bg-white px-7 py-4 text-sm font-bold transition duration-300 hover:scale-[0.98]">Open in new tab <ExternalLink className="h-4 w-4" /></Link> : null}
+          </div>
+          <InfoGrid items={[['Pages', pages, FileText], ['File size', fileSize, Download], ['Format', 'Download', FileText], ['Updated', updated, CheckCircle2]]} />
+        </div>
+      </section>
+
+      <section className="bg-[var(--tk-raised)]">
+        <div className="mx-auto grid max-w-[var(--editable-container)] gap-10 px-6 py-[100px] lg:grid-cols-[minmax(0,1fr)_360px]">
+          <article className="min-w-0">
+            {fileUrl ? (
+              <div className="overflow-hidden rounded-[24px] border border-[var(--tk-line)] bg-white shadow-[0_8px_28px_rgba(20,20,43,0.10)]">
+                <iframe src={`${fileUrl}#toolbar=0&navpanes=0&scrollbar=0`} title={post.title} className="h-[82vh] w-full bg-white" />
               </div>
-              <iframe src={`${fileUrl}#toolbar=0&navpanes=0&scrollbar=0`} title={post.title} className="h-[78vh] w-full bg-[var(--tk-raised)]" />
+            ) : null}
+            <div className="mt-10 rounded-[20px] border border-[var(--tk-line)] bg-white p-8 shadow-[0_2px_7px_rgba(20,20,43,0.06)] lg:p-12">
+              <h2 className="editable-display text-[32px] font-bold leading-[1.313]">Inside this reference</h2>
+              <BodyContent post={post} />
+              <TagChips post={post} />
+              {fileUrl ? (
+                <div className="mt-10 rounded-[20px] bg-[var(--tk-accent)] p-8 text-white">
+                  <h3 className="editable-display text-2xl font-bold">Keep this guide handy</h3>
+                  <p className="mt-3 text-sm leading-7 text-white/80">Download the full reference and return to it whenever you need the details.</p>
+                  <Link href={fileUrl} target="_blank" rel="noreferrer" className="mt-6 inline-flex rounded-full bg-white px-6 py-3 text-sm font-bold text-[var(--tk-accent)]">Download</Link>
+                </div>
+              ) : null}
+              <div className="mt-10">
+                <Ads slot="article-bottom" size={pickRandom(getSlotSizes('article-bottom'))} showLabel />
+              </div>
             </div>
-          ) : null}
-        </article>
-        <aside className="space-y-6 lg:sticky lg:top-24 lg:self-start">
-          {fileUrl ? (
-            <div className="rounded-[var(--tk-radius)] border border-[var(--tk-line)] bg-[var(--tk-surface)] p-6">
-              <p className="text-sm font-semibold">Get this document</p>
-              <p className="mt-2 text-sm leading-6 text-[var(--tk-muted)]">Open or download the full file in a new tab.</p>
-              <Link href={fileUrl} target="_blank" rel="noreferrer" className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[var(--tk-accent)] px-5 py-3 text-sm font-semibold text-[var(--tk-on-accent)] transition hover:opacity-90">Download <Download className="h-4 w-4" /></Link>
+          </article>
+          <aside className="space-y-6 lg:sticky lg:top-24 lg:self-start">
+            <div className="rounded-[20px] border border-[var(--tk-line)] bg-white p-6 shadow-[0_2px_7px_rgba(20,20,43,0.06)]">
+              <div className="editable-display flex h-24 w-24 items-center justify-center rounded-[20px] bg-[var(--tk-accent-soft)] text-[40px] font-bold text-[var(--tk-accent)]">R</div>
+              <h2 className="mt-5 break-words text-lg font-bold">{fileName}</h2>
+              <div className="mt-5 grid gap-3 text-sm text-[var(--tk-muted)]">
+                <BadgeLine label="Category" value={categoryOf(post, 'Guide')} />
+                <BadgeLine label="Pages" value={pages} />
+                <BadgeLine label="File size" value={fileSize} />
+                <BadgeLine label="Uploaded by" value={uploadedBy} />
+                <BadgeLine label="Updated" value={updated} />
+              </div>
+              {fileUrl ? <Link href={fileUrl} target="_blank" rel="noreferrer" className="mt-6 inline-flex w-full justify-center rounded-full bg-[var(--tk-accent)] px-6 py-4 text-sm font-bold text-white transition duration-300 hover:scale-[0.98]">Download</Link> : null}
             </div>
-          ) : null}
-          <RelatedPanel task="pdf" post={post} related={related} />
-        </aside>
-      </div>
-    </section>
+            <div className="rounded-[20px] border border-[var(--tk-line)] bg-white p-6">
+              <h3 className="text-sm font-bold">What's inside</h3>
+              <ul className="mt-4 grid gap-3 text-sm leading-6 text-[var(--tk-muted)]">
+                {['Overview and context', 'Key reference sections', 'Supporting notes'].map((item) => <li key={item} className="flex gap-2"><CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-[var(--tk-accent)]" /> {item}</li>)}
+              </ul>
+            </div>
+          </aside>
+        </div>
+      </section>
+      <RelatedStrip task="pdf" related={related} title="Related guides" documentTiles />
+    </>
   )
 }
 
@@ -418,10 +541,6 @@ function ProfileDetail({ post, related }: { post: SitePost; related: SitePost[] 
 }
 
 // ----- Shared building blocks -----
-function Divider() {
-  return <div className="my-10 h-px bg-[var(--tk-line)]" />
-}
-
 function BodyContent({ post, compact = false }: { post: SitePost; compact?: boolean }) {
   return (
     <div
@@ -456,6 +575,33 @@ function ImageStrip({ images, label, large = false }: { images: string[]; label:
       </div>
     </section>
   )
+}
+
+function TagChips({ post }: { post: SitePost }) {
+  const tags = Array.isArray(post.tags) ? post.tags.filter(Boolean).slice(0, 8) : []
+  if (!tags.length) return null
+  return (
+    <div className="mt-8 flex flex-wrap gap-2">
+      {tags.map((tag) => <span key={tag} className="rounded-full border border-[var(--tk-line)] bg-white px-4 py-2 text-xs font-semibold text-[var(--tk-muted)]">{tag}</span>)}
+    </div>
+  )
+}
+
+function ContactRow({ icon: Icon, label, value, href }: { icon: typeof MapPin; label: string; value?: string; href?: string }) {
+  if (!value) return null
+  const inner = (
+    <>
+      <Icon className="h-4 w-4 shrink-0 text-[var(--tk-accent)]" />
+      <span className="min-w-0">
+        <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--tk-muted)]">{label}</span>
+        <span className="mt-1 block break-words text-sm font-semibold text-[var(--tk-text)]">{value}</span>
+      </span>
+    </>
+  )
+  if (href) {
+    return <Link href={href} target={href.startsWith('http') ? '_blank' : undefined} rel={href.startsWith('http') ? 'noreferrer' : undefined} className="flex gap-3 rounded-[16px] border border-[var(--tk-line)] p-4 transition duration-300 hover:scale-[0.98]">{inner}</Link>
+  }
+  return <div className="flex gap-3 rounded-[16px] border border-[var(--tk-line)] p-4">{inner}</div>
 }
 
 function MapBox({ src, label }: { src: string; label: string }) {
@@ -494,57 +640,41 @@ function BadgeLine({ label, value }: { label: string; value: string }) {
   )
 }
 
-function RelatedPanel({ task, post, related }: { task: TaskKey; post: SitePost; related: SitePost[] }) {
-  const taskConfig = getTaskConfig(task)
-  return (
-    <div className="space-y-6">
-      <div className="rounded-[var(--tk-radius)] border border-[var(--tk-line)] bg-[var(--tk-surface)] p-6">
-        <p className="text-xs font-medium uppercase tracking-[0.2em] text-[var(--tk-muted)]">About this post</p>
-        <div className="mt-4 grid gap-2.5 text-sm text-[var(--tk-muted)]">
-          <p className="inline-flex items-center gap-2"><Tag className="h-4 w-4 text-[var(--tk-accent)]" /> {taskConfig?.label || task}</p>
-          <p className="inline-flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-[var(--tk-accent)]" /> {SITE_CONFIG.name}</p>
-        </div>
-      </div>
-      {related.length ? (
-        <div className="rounded-[var(--tk-radius)] border border-[var(--tk-line)] bg-[var(--tk-surface)] p-6">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="editable-display text-lg font-semibold tracking-[-0.02em]">More like this</h2>
-            <Link href={taskConfig?.route || '/'} className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--tk-accent)]">View all</Link>
-          </div>
-          <div className="mt-5 grid gap-3">
-            {related.map((item) => <RelatedCard key={item.id || item.slug} task={task} post={item} />)}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function RelatedStrip({ task, related }: { task: TaskKey; related: SitePost[] }) {
+function RelatedStrip({ task, related, title, documentTiles = false }: { task: TaskKey; related: SitePost[]; title?: string; documentTiles?: boolean }) {
   if (!related.length) return null
   const taskConfig = getTaskConfig(task)
+  const label = title || `More ${displayTaskLabel(task, taskConfig?.label || 'entries').toLowerCase()}`
   return (
     <section className="border-t border-[var(--tk-line)]">
       <div className="mx-auto max-w-[var(--editable-container)] px-6 py-14 sm:py-16 lg:px-8">
         <div className="flex items-center justify-between">
-          <h2 className="editable-display text-2xl font-semibold tracking-[-0.02em]">More {(taskConfig?.label || 'posts').toLowerCase()}</h2>
+          <h2 className="editable-display text-2xl font-semibold">{label}</h2>
           <Link href={taskConfig?.route || '/'} className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--tk-accent)]">View all <ArrowUpRight className="h-4 w-4" /></Link>
         </div>
         <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {related.map((item) => <RelatedCard key={item.id || item.slug} task={task} post={item} grid />)}
+          {related.map((item) => <RelatedCard key={item.id || item.slug} task={task} post={item} grid documentTile={documentTiles} />)}
         </div>
       </div>
     </section>
   )
 }
 
-function RelatedCard({ task, post, grid = false }: { task: TaskKey; post: SitePost; grid?: boolean }) {
+function RelatedCard({ task, post, grid = false, documentTile = false }: { task: TaskKey; post: SitePost; grid?: boolean; documentTile?: boolean }) {
   const image = getImages(post)[0]
   // Build the detail URL from the task route (e.g. /listing/<slug>) — the same
   // base the archive cards use. buildPostUrl() can fall back to /posts when the
   // task isn't in the enabled taskViews map, which 404s.
   const href = `${getTaskConfig(task)?.route || `/${task}`}/${post.slug}`
   if (grid) {
+    if (documentTile) {
+      return (
+        <Link href={href} className="group block rounded-[20px] border border-[var(--tk-line)] bg-white p-6 transition duration-300 hover:scale-[0.98]">
+          <div className="editable-display flex h-16 w-16 items-center justify-center rounded-[18px] bg-[var(--tk-accent-soft)] text-2xl font-bold text-[var(--tk-accent)]">R</div>
+          <h3 className="mt-5 line-clamp-2 text-base font-bold leading-snug">{post.title}</h3>
+          <span className="mt-4 inline-flex rounded-full border border-[var(--tk-line)] px-3 py-1 text-xs font-semibold text-[var(--tk-muted)]">{fileSizeFromPost(post) || 'Size unavailable'}</span>
+        </Link>
+      )
+    }
     return (
       <Link href={href} className="group block overflow-hidden rounded-[var(--tk-radius)] border border-[var(--tk-line)] bg-[var(--tk-surface)] transition duration-300 hover:-translate-y-1">
         <div className="aspect-[16/10] overflow-hidden bg-[var(--tk-raised)]">
